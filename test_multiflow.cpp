@@ -16,6 +16,7 @@
 
 // 模拟网络
 LatencySimulator *vnet;
+LatencySimulator *vnet2;
 
 // 模拟网络：模拟发送一个 udp包
 int udp_output(const char *buf, int len, ikcpcb *kcp, void *user)
@@ -23,6 +24,7 @@ int udp_output(const char *buf, int len, ikcpcb *kcp, void *user)
 	union { int id; void *ptr; } parameter;
 	parameter.ptr = user;
 	vnet->send(parameter.id, buf, len);
+	vnet2->send(parameter.id, buf, len);
 	return 0;
 }
 
@@ -31,6 +33,7 @@ void test(int mode)
 {
 	// 创建模拟网络：丢包率10%，Rtt 60ms~125ms
 	vnet = new LatencySimulator(30, 30, 60);
+	vnet2 = new LatencySimulator(5, 40, 70);
 
 	// 创建两个端点的 kcp对象，第一个参数 conv是会话编号，同一个会话需要相同
 	// 最后一个是 user参数，用来传递标识
@@ -113,6 +116,22 @@ void test(int mode)
 			ikcp_input(kcp1, buffer, hr);
 		}
 
+		// 处理虚拟网络：检测是否有udp包从p1->p2
+		while (1) {
+			hr = vnet2->recv(1, buffer, 2000);
+			if (hr < 0) break;
+			// 如果 p2收到udp，则作为下层协议输入到kcp2
+			ikcp_input(kcp2, buffer, hr);
+		}
+
+		// 处理虚拟网络：检测是否有udp包从p2->p1
+		while (1) {
+			hr = vnet2->recv(0, buffer, 2000);
+			if (hr < 0) break;
+			// 如果 p1收到udp，则作为下层协议输入到kcp1
+			ikcp_input(kcp1, buffer, hr);
+		}
+
 		// kcp2接收到任何包都返回回去
 		while (1) {
 			hr = ikcp_recv(kcp2, buffer, 10);
@@ -155,6 +174,7 @@ void test(int mode)
 	const char *names[3] = { "default", "normal", "fast" };
 	printf("%s mode result (%dms):\n", names[mode], (int)ts1);
 	printf("avgrtt=%d maxrtt=%d tx=%d\n", (int)(sumrtt / count), (int)maxrtt, (int)vnet->tx1);
+	printf("avgrtt=%d maxrtt=%d tx=%d\n", (int)(sumrtt / count), (int)maxrtt, (int)vnet2->tx1);
 	printf("press enter to next ...\n");
 	char ch; scanf("%c", &ch);
 }
@@ -166,6 +186,28 @@ int main()
 	test(2);	// 快速模式，所有开关都打开，且关闭流控
 	return 0;
 }
+
+/* Two net:
+default mode result (20126ms):
+avgrtt=161 maxrtt=602 tx=1101
+
+normal mode result (20091ms):
+avgrtt=94 maxrtt=276 tx=1586
+
+fast mode result (20114ms):
+avgrtt=92 maxrtt=231 tx=1596
+*/
+
+/* Single net:
+default mode result (28683ms):
+avgrtt=4709 maxrtt=8802 tx=336
+
+normal mode result (20094ms):
+avgrtt=162 maxrtt=631 tx=1266
+
+fast mode result (20111ms):
+avgrtt=138 maxrtt=374 tx=1390
+*/
 
 /*
 default mode result (20917ms):
